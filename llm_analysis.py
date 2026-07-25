@@ -20,7 +20,10 @@ Instructions:
 
    * **What it is:** Provide the [Test Name], [Result], and [Status]. Explain briefly and simply what this test measures in the body.
    * **Causes:** If the result is abnormal (High/Low), explain the most common reasons or causes for this specific result. (If normal, simply state it indicates good health).
-   * **Solutions:** If the result is abnormal, provide clear, practical, and safe recommendations (diet, lifestyle, or medical next steps) to fix or manage it. (If normal, skip this part).
+   * **Solutions:** If the result is abnormal, provide educational examples of what a physician typically recommends for this specific marker (e.g., targeted further tests, specific vitamins, or dietary adjustments). 
+    **CRITICAL RULES FOR THIS SECTION:** 
+    1. Assume the patient is already consulting with you, so you MUST NOT write "consult your doctor," "work with your healthcare provider," or "discuss treatment options." 
+    2. Do NOT write generic advice like "eat healthy" or "exercise" here. Keep it strictly specific to the marker.
 
 5. After explaining every individual test using the 3 steps above, provide a brief **Overall Assessment** summarizing the general health picture and how the abnormal results might be connected.
 
