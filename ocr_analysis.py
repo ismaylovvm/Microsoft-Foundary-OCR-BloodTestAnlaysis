@@ -3,8 +3,6 @@
 from azure.core.credentials import AzureKeyCredential
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
-from  process_analysis import parse_table
-
 import os
 from dotenv import load_dotenv
 
