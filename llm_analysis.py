@@ -56,7 +56,12 @@ def analyze_blood_test(image_path: str) -> list[dict]:
 
 def initialize_manager(progress_callback=None):
     config = Configuration(app_name=FOUNDRY_APP_NAME)
-    FoundryLocalManager.initialize(config)
+    if getattr(FoundryLocalManager, "instance", None) is None:
+        try:
+            FoundryLocalManager.initialize(config)
+        except RuntimeError as exc:
+            if "already been initialized" not in str(exc):
+                raise
     manager = FoundryLocalManager.instance
     manager.download_and_register_eps(progress_callback=progress_callback)
     return manager

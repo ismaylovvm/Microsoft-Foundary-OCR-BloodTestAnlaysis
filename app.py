@@ -67,27 +67,45 @@ def ensure_llm_client():
     if st.session_state.get("llm_client") is not None:
         return st.session_state.llm_client
 
-    with st.status("Yerel AI modeli hazırlanıyor…", expanded=True) as status:
-        ep_label = st.empty()
+    if st.session_state.get("llm_loading"):
+        st.warning("Model hâlâ yükleniyor, lütfen bekleyin…")
+        st.stop()
 
-        def ep_progress(ep_name: str, percent: float):
-            ep_label.write(f"{ep_name}: {percent:.1f}%")
+    st.session_state.llm_loading = True
+    try:
+        with st.status("Yerel AI modeli hazırlanıyor…", expanded=True) as status:
+            ep_label = st.empty()
 
-        st.write("Execution provider kayıtları indiriliyor…")
-        manager = initialize_manager(progress_callback=ep_progress)
+            def ep_progress(ep_name: str, percent: float):
+                ep_label.write(f"{ep_name}: {percent:.1f}%")
 
-        dl_label = st.empty()
+            st.write("Execution provider kayıtları indiriliyor…")
+            manager = st.session_state.get("llm_manager")
+            if manager is None:
+                manager = initialize_manager(progress_callback=ep_progress)
+                st.session_state.llm_manager = manager
 
-        def download_progress(progress: float):
-            dl_label.write(f"Phi-4-mini indiriliyor: {progress:.1f}%")
+            dl_label = st.empty()
 
-        st.write("Model yükleniyor…")
-        model, client = load_model_and_client(manager, download_progress=download_progress)
-        st.session_state.llm_model = model
-        st.session_state.llm_client = client
-        status.update(label="Model hazır", state="complete")
+            def download_progress(progress: float):
+                dl_label.write(f"Phi-4-mini indiriliyor: {progress:.1f}%")
 
-    return client
+            st.write("Model yükleniyor…")
+            model = st.session_state.get("llm_model")
+            if model is None:
+                model, client = load_model_and_client(
+                    manager, download_progress=download_progress
+                )
+                st.session_state.llm_model = model
+                st.session_state.llm_client = client
+            else:
+                client = model.get_chat_client()
+                st.session_state.llm_client = client
+            status.update(label="Model hazır", state="complete")
+
+        return st.session_state.llm_client
+    finally:
+        st.session_state.llm_loading = False
 
 
 def run_ocr_from_upload(uploaded_file) -> list[dict]:
