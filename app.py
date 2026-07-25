@@ -3,8 +3,15 @@ from pathlib import Path
 
 import streamlit as st
 
-from data_process import parse_table
-from ocr_analysis import analyze_table
+from llm_analysis import (
+    INITIAL_PROMPT,
+    analyze_blood_test,
+    build_api_messages,
+    create_initial_messages,
+    initialize_manager,
+    load_model_and_client,
+    stream_chat_response,
+)
 
 st.set_page_config(
     page_title="Kan Tahlili Analizi",
@@ -55,65 +62,27 @@ STATUS_LABELS = {
     "unknown": ("Belirsiz", "status-unknown"),
 }
 
-SYSTEM_PROMPT = """
-You are an experienced physician explaining blood test results to a patient.
-Your goal is to provide a professional, clear, medically accurate, and very simple interpretation of the laboratory report.
-
-Instructions:
-
-1. Analyze the ENTIRE report before answering.
-2. Analyze EVERY test exactly once in the order they appear. Never skip any test.
-3. Use the provided "status" field as the correct classification. Do not recalculate.
-
-4. For EACH test, keep your explanation strictly to these 3 simple steps:
-
-   * **What it is:** Provide the [Test Name], [Result], and [Status]. Explain briefly and simply what this test measures in the body.
-   * **Causes:** If the result is abnormal (High/Low), explain the most common reasons or causes for this specific result. (If normal, simply state it indicates good health).
-   * **Solutions:** If the result is abnormal, provide clear, practical, and safe recommendations (diet, lifestyle, or medical next steps) to fix or manage it. (If normal, skip this part).
-
-5. After explaining every individual test using the 3 steps above, provide a brief **Overall Assessment** summarizing the general health picture and how the abnormal results might be connected.
-
-Respond in Turkish unless the user asks otherwise.
-"""
-
-INITIAL_PROMPT = (
-    "Lütfen kan tahlili raporumu eksiksiz ve sade bir dille yorumla. "
-    "Her testi sırayla 3 adımda (Ne ölçülür, Olası nedenler, Öneriler) açıkla, "
-    "sonunda genel bir değerlendirme yap. Anormal sonuçlar için mutlaka öneri ver."
-)
-
-
-def build_context(parsed_result):
-    lines = []
-    for row in parsed_result:
-        unit = row.get("unit") or "-"
-        ref = row.get("reference_range") or "-"
-        status = row.get("status") or "unknown"
-        lines.append(
-            f"- {row['test_name']}: {row['value']} {unit} "
-            f"(referans: {ref}, durum: {status})"
-        )
-    return "patient's blood analysis results :\n" + "\n".join(lines)
-
 
 def ensure_llm_client():
     if st.session_state.get("llm_client") is not None:
         return st.session_state.llm_client
 
-    from foundry_local_sdk import Configuration, FoundryLocalManager
-
-    config = Configuration(app_name="ocr_blood_analysis_ui")
-    FoundryLocalManager.initialize(config)
-    manager = FoundryLocalManager.instance
-
     with st.status("Yerel AI modeli hazırlanıyor…", expanded=True) as status:
+        ep_label = st.empty()
+
+        def ep_progress(ep_name: str, percent: float):
+            ep_label.write(f"{ep_name}: {percent:.1f}%")
+
         st.write("Execution provider kayıtları indiriliyor…")
-        manager.download_and_register_eps()
-        st.write("Phi-4-mini indiriliyor ve yükleniyor…")
-        model = manager.catalog.get_model("phi-4-mini")
-        model.download(lambda p: None)
-        model.load()
-        client = model.get_chat_client()
+        manager = initialize_manager(progress_callback=ep_progress)
+
+        dl_label = st.empty()
+
+        def download_progress(progress: float):
+            dl_label.write(f"Phi-4-mini indiriliyor: {progress:.1f}%")
+
+        st.write("Model yükleniyor…")
+        model, client = load_model_and_client(manager, download_progress=download_progress)
         st.session_state.llm_model = model
         st.session_state.llm_client = client
         status.update(label="Model hazır", state="complete")
@@ -121,13 +90,12 @@ def ensure_llm_client():
     return client
 
 
-def run_ocr(uploaded_file) -> list[dict]:
+def run_ocr_from_upload(uploaded_file) -> list[dict]:
     suffix = Path(uploaded_file.name).suffix or ".png"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(uploaded_file.getvalue())
         tmp_path = tmp.name
-    result = analyze_table(tmp_path)
-    return parse_table(result)
+    return analyze_blood_test(tmp_path)
 
 
 def render_results_table(rows: list[dict]):
@@ -151,20 +119,20 @@ def render_results_table(rows: list[dict]):
         st.divider()
 
 
-# --- Sidebar ---
 with st.sidebar:
     st.markdown("## 🩸")
     st.title("Ayarlar")
-    st.caption("Azure Document Intelligence ile OCR; yorum için yerel Phi-4-mini.")
+    st.caption("OCR + yerel Phi-4-mini akışı `llm_analysis.py` ile aynıdır.")
     st.divider()
     st.markdown("**Gerekli ortam değişkenleri**")
     st.code("ocr_endpoint\nocr_key", language="text")
+    st.markdown("**CLI alternatifi**")
+    st.code("python llm_analysis.py", language="bash")
     st.info(
         "Bu uygulama tıbbi teşhis koymaz; bilgilendirme amaçlıdır. "
         "Sonuçlar için mutlaka bir hekime danışın."
     )
 
-# --- Header ---
 st.markdown(
     """
 <div class="main-header">
@@ -198,7 +166,7 @@ with tab_upload:
         if uploaded and st.button("Analiz et", type="primary", use_container_width=True):
             with st.spinner("Azure OCR ile tablo okunuyor…"):
                 try:
-                    st.session_state.parsed_results = run_ocr(uploaded)
+                    st.session_state.parsed_results = run_ocr_from_upload(uploaded)
                     st.session_state.chat_messages = []
                     st.session_state.interpretation_done = False
                     st.success(f"{len(st.session_state.parsed_results)} test okundu.")
@@ -225,24 +193,14 @@ with tab_upload:
             if st.button("Yorumu oluştur", use_container_width=True):
                 try:
                     client = ensure_llm_client()
-                    context = build_context(rows)
-                    messages = [
-                        {"role": "system", "content": SYSTEM_PROMPT + "\n\n" + context},
-                        {"role": "user", "content": INITIAL_PROMPT},
-                    ]
+                    messages = create_initial_messages(rows)
                     st.session_state.chat_messages = [{"role": "user", "content": INITIAL_PROMPT}]
                     full = ""
-                    placeholder = st.empty()
-                    with placeholder.container():
-                        with st.chat_message("assistant"):
-                            stream_box = st.empty()
-                            for chunk in client.complete_streaming_chat(messages):
-                                if not chunk.choices:
-                                    continue
-                                part = chunk.choices[0].delta.content
-                                if part:
-                                    full += part
-                                    stream_box.markdown(full)
+                    with st.chat_message("assistant"):
+                        stream_box = st.empty()
+                        for part in stream_chat_response(client, messages):
+                            full += part
+                            stream_box.markdown(full)
                     st.session_state.chat_messages.append({"role": "assistant", "content": full})
                     st.session_state.interpretation_done = True
                     st.success("Yorum hazır. «AI Asistan» sekmesinden soru sorabilirsiniz.")
@@ -264,30 +222,24 @@ with tab_chat:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        if prompt := st.chat_input("Örn: Düşük hemoglobin için ne yapmalıyım?"):
+        if prompt := st.chat_input("Örn: What should I do about low hemoglobin?"):
             st.session_state.chat_messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
 
             try:
                 client = ensure_llm_client()
-                context = build_context(st.session_state.parsed_results)
-                api_messages = [
-                    {"role": "system", "content": SYSTEM_PROMPT + "\n\n" + context},
-                ]
-                for m in st.session_state.chat_messages:
-                    api_messages.append({"role": m["role"], "content": m["content"]})
+                api_messages = build_api_messages(
+                    st.session_state.parsed_results,
+                    st.session_state.chat_messages,
+                )
 
                 full = ""
                 with st.chat_message("assistant"):
                     box = st.empty()
-                    for chunk in client.complete_streaming_chat(api_messages):
-                        if not chunk.choices:
-                            continue
-                        part = chunk.choices[0].delta.content
-                        if part:
-                            full += part
-                            box.markdown(full)
+                    for part in stream_chat_response(client, api_messages):
+                        full += part
+                        box.markdown(full)
                 st.session_state.chat_messages.append({"role": "assistant", "content": full})
             except Exception as e:
                 st.error(f"Sohbet hatası: {e}")

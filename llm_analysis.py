@@ -1,10 +1,10 @@
 from foundry_local_sdk import Configuration, FoundryLocalManager
 from ocr_analysis import analyze_table
-from data_process import parse_table, to_documents
+from data_process import parse_table
 
 SOURCE_FILE = "example_data/example2.png"
-
-
+FOUNDRY_APP_NAME = "foundry_local_samples"
+MODEL_NAME = "phi-4-mini"
 
 SYSTEM_PROMPT = """
 You are an experienced physician explaining blood test results to a patient. 
@@ -28,9 +28,10 @@ Instructions:
 
 INITIAL_PROMPT = (
     "Please provide a complete and simple interpretation of my blood test report. "
-   "Analyze every test result one by one following the 3 steps (What it is, Causes, Solutions), then provide an overall medical assessment."
-   "Give solutions for every test result"
+    "Analyze every test result one by one following the 3 steps (What it is, Causes, Solutions), then provide an overall medical assessment."
+    "Give solutions for every test result"
 )
+
 
 def build_context(parsed_result):
     satirlar = []
@@ -47,11 +48,58 @@ def build_context(parsed_result):
 
     return "patient's blood analysis results :\n" + "\n".join(satirlar)
 
-def main():
-    config = Configuration(app_name="foundry_local_samples")
+
+def analyze_blood_test(image_path: str) -> list[dict]:
+    result = analyze_table(image_path)
+    return parse_table(result)
+
+
+def initialize_manager(progress_callback=None):
+    config = Configuration(app_name=FOUNDRY_APP_NAME)
     FoundryLocalManager.initialize(config)
     manager = FoundryLocalManager.instance
+    manager.download_and_register_eps(progress_callback=progress_callback)
+    return manager
 
+
+def load_model_and_client(manager, download_progress=None):
+    model = manager.catalog.get_model(MODEL_NAME)
+    model.download(download_progress or (lambda _progress: None))
+    model.load()
+    return model, model.get_chat_client()
+
+
+def build_system_message(parsed_result):
+    return {
+        "role": "system",
+        "content": SYSTEM_PROMPT + "\n\n" + build_context(parsed_result),
+    }
+
+
+def create_initial_messages(parsed_result):
+    return [
+        build_system_message(parsed_result),
+        {"role": "user", "content": INITIAL_PROMPT},
+    ]
+
+
+def build_api_messages(parsed_result, conversation):
+    """conversation: list of user/assistant dicts (no system)."""
+    messages = [build_system_message(parsed_result)]
+    messages.extend(conversation)
+    return messages
+
+
+def stream_chat_response(client, messages):
+    for chunk in client.complete_streaming_chat(messages):
+        if not chunk.choices:
+            continue
+        content = chunk.choices[0].delta.content
+        if content:
+            yield content
+
+
+def main():
     current_ep = ""
 
     def ep_progress(ep_name: str, percent: float):
@@ -62,47 +110,30 @@ def main():
             current_ep = ep_name
         print(f"\r  {ep_name:<30}  {percent:5.1f}%", end="", flush=True)
 
-    manager.download_and_register_eps(progress_callback=ep_progress)
+    manager = initialize_manager(progress_callback=ep_progress)
     if current_ep:
         print()
 
-
     print("blood test is being analyzed...")
-    result = analyze_table(SOURCE_FILE)
-    parsed_result = parse_table(result)
-    context = build_context(parsed_result)
+    parsed_result = analyze_blood_test(SOURCE_FILE)
     print(f"{len(parsed_result)} finded test result.\n")
 
-    
-
-
-    # --- Download Model ---
-    model = manager.catalog.get_model("phi-4-mini")
-    model.download(
-        lambda progress: print(f"\rDownloading model: {progress:.2f}%", end="", flush=True)
+    model, client = load_model_and_client(
+        manager,
+        download_progress=lambda progress: print(
+            f"\rDownloading model: {progress:.2f}%", end="", flush=True
+        ),
     )
     print()
-    model.load()
     print("Model loaded and ready.")
 
-    client = model.get_chat_client()
-
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT + "\n\n" + context}
-    ]
-
-    
-    messages.append({"role": "user", "content": INITIAL_PROMPT})
+    messages = create_initial_messages(parsed_result)
 
     print("\nAsistan: ", end="", flush=True)
     full_response = ""
-    for chunk in client.complete_streaming_chat(messages):
-        if not chunk.choices:
-            continue
-        content = chunk.choices[0].delta.content
-        if content:
-            print(content, end="", flush=True)
-            full_response += content
+    for content in stream_chat_response(client, messages):
+        print(content, end="", flush=True)
+        full_response += content
     print("\n")
     messages.append({"role": "assistant", "content": full_response})
 
@@ -117,13 +148,9 @@ def main():
 
         print("Assistan: ", end="", flush=True)
         full_response = ""
-        for chunk in client.complete_streaming_chat(messages):
-            if not chunk.choices:
-                continue
-            content = chunk.choices[0].delta.content
-            if content:
-                print(content, end="", flush=True)
-                full_response += content
+        for content in stream_chat_response(client, messages):
+            print(content, end="", flush=True)
+            full_response += content
         print("\n")
 
         messages.append({"role": "assistant", "content": full_response})
