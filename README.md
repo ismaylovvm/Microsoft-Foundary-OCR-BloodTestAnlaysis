@@ -14,6 +14,14 @@ plain-language explanation through a local AI model.
 > interpretations it generates are for informational purposes only;
 > always consult a doctor for an accurate evaluation.
 
+## 🎥 Demo
+
+
+
+https://github.com/user-attachments/assets/14d04d34-4676-4986-a936-f5a6ce9899f6
+
+
+
 ## Technologies Used
 
 - **Python 3**
