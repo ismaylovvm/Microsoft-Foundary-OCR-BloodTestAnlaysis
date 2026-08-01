@@ -13,6 +13,14 @@ aracılığıyla anlaşılır bir açıklama üretir.
 > **Not:** Bu uygulama tıbbi tanı koymaz. Ürettiği yorumlar yalnızca
 > bilgilendirme amaçlıdır; kesin sonuç için bir doktora danışılmalıdır.
 
+## 🎥 Demo
+
+
+
+https://github.com/user-attachments/assets/c38875eb-15a4-4aba-b6f6-0690ef46b3dd
+
+
+
 ## Kullanılan Teknolojiler
 
 - **Python 3**
